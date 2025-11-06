@@ -1,23 +1,25 @@
-
 import concurrent.futures
 import subprocess
-import sys
+import sys, os
 import argparse
 import contextlib
+from typing import TextIO
+from collections.abc import Iterator
 
 version = "1.0"
-visit = "Visit the project at https://github.com/alephreish/ffindex-py"
+visit = "Visit the project at https://github.com/alephreish/ffindex_py"
 
 @contextlib.contextmanager
-def open_file_or_stdout(filename, mode = 'w'):
-    fh = sys.stdout if filename == '-' else open(filename, mode)
+def open_file_or_stdout(filename: str, mode: str = 'w') -> TextIO:
+    is_stdout = not filename or filename == '-'
+    fh = os.fdopen(sys.stdout.fileno(), mode) if is_stdout else open(filename, mode)
     try:
         yield fh
     finally:
-        if fh is not sys.stdout:
+        if not is_stdout:
             fh.close()
 
-def read_fasta(file):
+def read_fasta(file: TextIO) -> tuple[str, str, str]:
     seq = name = header = ''
     for line in file:
         if line.startswith('>'):
@@ -31,12 +33,15 @@ def read_fasta(file):
     if seq:
         yield name, header, seq
 
-def read_ffindex(file):
+def read_ffindex(file: TextIO) -> Iterator[tuple[str, str, int, int]]:
     for index, line in enumerate(file):
         name, start, length = line.split('\t')
         yield index, name, int(start), int(length)
 
-def apply_to_record(command, name, start, length, ffdata_in):
+def apply_to_record(command: list[str], name: str, start: int, length: int, ffdata_in: str) -> tuple[str, str, str, int]:
+    """
+    Run a command on a single record
+    """
     with open(ffdata_in, 'rb') as ffdata:
         ffdata.seek(start)
         record = ffdata.read(length - 1)
@@ -44,7 +49,7 @@ def apply_to_record(command, name, start, length, ffdata_in):
         stdout, stderr = process.communicate(input = record)
         return name, stdout, stderr, process.returncode
 
-def run_get():
+def run_get() -> None:
     description = "ffindex_get re-implementation in python"
     parser = argparse.ArgumentParser(description = f"{description}\n{visit}", add_help = False)
 
@@ -55,8 +60,8 @@ def run_get():
     arg_group.add_argument('-n', action = 'store_true', help = 'Use index of entry instead of entry name.')
     arg_group.add_argument('--entries-file', metavar = 'FILE_WITH_ENTRIES', type = str, help = 'Text file with entries (or indices).')
 
-    arg_group.add_argument('-d', metavar = 'DATA_FILENAME_OUT', required = True, type = str, help = 'FFindex data file where the results will be saved to.')
-    arg_group.add_argument('-i', metavar = 'INDEX_FILENAME_OUT', required = True, type = str, help = 'FFindex index file where the results will be saved to.')
+    arg_group.add_argument('-d', metavar = 'DATA_FILENAME_OUT', type = str, help = 'FFindex data file where the results will be saved to.')
+    arg_group.add_argument('-i', metavar = 'INDEX_FILENAME_OUT', type = str, help = 'FFindex index file where the results will be saved to.')
 
     arg_group.add_argument('data_filename', metavar = 'DATA_FILENAME', type = str, help = 'Input ffindex data file.')
     arg_group.add_argument('index_filename', metavar = 'INDEX_FILENAME', type = str, help = 'Input ffindex index file.')
@@ -66,9 +71,11 @@ def run_get():
     use_index = args.n
     ffdata_in = args.data_filename
     ffindex_in = args.index_filename
+
     ffdata_out = args.d
     ffindex_out = args.i
 
+    assert ffdata_out and ffindex_out or not ffdata_out and not ffindex_out, "Either specify both -d and -i or none to output to stdout"
     assert args.entries_file or args.entries and not (args.entries_file and args.entries), "Either specify in-line entries or a file with entries"
 
     entries = []
@@ -84,26 +91,32 @@ def run_get():
             try:
                 entries[i] = int(entry)
             except Exception as e:
-                raise Exception(f"Integer expected for entry index, got '{entry}'")
+                raise ValueError(f"Integer expected for entry index, got '{entry}'")
 
     found = [ (None, None, None) ] * len(entries)
 
-    with open(ffindex_in, 'r') as index_in, open(ffdata_in, 'rb', buffering = 0) as data_in, open(ffindex_out, 'w') as index_out, open(ffdata_out, 'wb') as data_out:
+    len_subtract = -1 if not ffdata_out else 0 # remove zero byte if output to stdout
+    with open(ffindex_in, 'r') as index_in, open(ffdata_in, 'rb', buffering = 0) as data_in, open_file_or_stdout(ffdata_out, 'wb') as data_out:
         offset = 0
         for index, name, start, length in read_ffindex(index_in):
             needle = index if use_index else name
             if needle in entries:
                 i = entries.index(needle)
                 data_in.seek(start)
-                record = data_in.read(length)
+                record = data_in.read(length + len_subtract)
                 data_out.write(record)
                 found[i] = name, offset, length
                 offset += length
+    if ffindex_out:
+        with open(ffindex_out, 'w') as index_out:
+            for i, (name, offset, length) in enumerate(found):
+                assert name is not None, f"Requested entry '{entries[i]}' not found in the index"
+                index_out.write(f"{name}\t{offset}\t{length}\n")
+    else:
         for i, (name, offset, length) in enumerate(found):
             assert name is not None, f"Requested entry '{entries[i]}' not found in the index"
-            index_out.write(f"{name}\t{offset}\t{length}\n")
 
-def read_header_line(file):
+def read_header_line(file: TextIO) -> str:
     header = ''
     while True:
         data_chunk = file.read(1024)
@@ -114,15 +127,15 @@ def read_header_line(file):
             else:
                 header += chr(byte)
 
-def run_rename():
-    description = "rename ffindex records"
+def run_rename() -> None:
+    description = "rename ffindex records based on first line of data"
     parser = argparse.ArgumentParser(description = f"{description}\n{visit}", add_help = False)
 
     arg_group = parser.add_argument_group()
 
     arg_group.add_argument('-h', '--help', action = 'help', default = argparse.SUPPRESS, help = "Show this help message and exit.")
     arg_group.add_argument('-v', '--version', action = 'version', version = "%(prog)s v{version}", help = "Show program's version number and exit.")
-    arg_group.add_argument('-i', metavar = 'INDEX_FILENAME_OUT', required = True, type = str, help = 'FFindex index file where the results will be saved to.')
+    arg_group.add_argument('-i', metavar = 'INDEX_FILENAME_OUT', type = str, help = 'FFindex index file where the results will be saved to.')
 
     arg_group.add_argument('data_filename', metavar = 'DATA_FILENAME', type = str, help = 'Input ffindex data file.')
     arg_group.add_argument('index_filename', metavar = 'INDEX_FILENAME', type = str, help = 'Input ffindex index file.')
@@ -130,7 +143,7 @@ def run_rename():
     args = parser.parse_args()
     ffdata_in = args.data_filename
     ffindex_in = args.index_filename
-    ffindex_out = args.i if args.i else '-'
+    ffindex_out = args.i
 
     names = {}
     with open(ffindex_in) as index_in, open(ffdata_in, 'rb') as data_in, open_file_or_stdout(ffindex_out, 'w') as index_out:
@@ -143,7 +156,7 @@ def run_rename():
             names[new_name] = True
             index_out.write(f'{new_name}\t{start}\t{length}\n')
 
-def run_apply():
+def run_apply() -> None:
 
     class CustomHelpFormatter(argparse.HelpFormatter):
         def __init__(self, prog):
@@ -224,7 +237,7 @@ def run_apply():
                         offset0, length0 = index_buf.pop(name0)
                         outindex.write(f"{name0}\t{offset0}\t{length0}\n")
 
-def run_reindex():
+def run_reindex() -> None:
     description = "Re-index an existing .ffdata file"
     parser = argparse.ArgumentParser(description = f"{description}\n{visit}", add_help = False)
 
@@ -283,7 +296,7 @@ def run_reindex():
             else:
                 break
 
-def run_from_fasta():
+def run_from_fasta() -> None:
     description = "Create a ffindex database from a fasta file"
     parser = argparse.ArgumentParser(description = f"{description}\n{visit}", add_help = False)
 

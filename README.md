@@ -1,4 +1,4 @@
-ffindex-py
+ffindex\_py
 ==========
 
 [ffindex](https://github.com/ahcm/ffindex) re-implementation in python.
