@@ -192,8 +192,10 @@ def run_apply() -> None:
     arg_group.add_argument('-d', metavar = 'DATA_FILENAME_OUT', type = str, help = 'FFindex data file where the results will be saved to.')
     arg_group.add_argument('-i', metavar = 'INDEX_FILENAME_OUT', type = str, help = 'FFindex index file where the results will be saved to.')
 
-    arg_group.add_argument('--index-order', type = str, choices = [ 'keep', 'sort', 'data' ], default = 'keep', help = 'How to order ffindex records [keep] (ffindex_apply keeps, ffindex_apply_mpi sorts).')
-    arg_group.add_argument('--on-error', type = str, choices = [ 'ignore', 'exit', 'blank', 'original' ], default = 'ignore', help = 'Action on exit code >0 [ignore] (ffindex_apply ignores).')
+    index_order_default = 'keep'
+    on_error_default = 'exit'
+    arg_group.add_argument('--index-order', type = str, choices = [ 'keep', 'sort', 'data' ], default = index_order_default, help = f'How to order ffindex records [{index_order_default}] (NB: ffindex_apply keeps, ffindex_apply_mpi sorts).')
+    arg_group.add_argument('--on-error', type = str, choices = [ 'exit', 'ignore', 'blank', 'original' ], default = on_error_default, help = f'Action on exit code >0 [{on_error_default}] (NB: ffindex_apply ignores).')
 
     arg_group.add_argument('data_filename', metavar = 'DATA_FILENAME', type = str, help = 'Input ffindex data file.')
     arg_group.add_argument('index_filename', metavar = 'INDEX_FILENAME', type = str, help = 'Input ffindex index file.')
