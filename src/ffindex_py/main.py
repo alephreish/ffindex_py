@@ -7,17 +7,37 @@ from typing import TextIO
 from collections.abc import Iterator
 
 version = "1.0"
-visit = "Visit the project at https://github.com/alephreish/ffindex_py"
+visit = "[https://github.com/alephreish/ffindex_py]"
+
+class CustomHelpFormatter(argparse.HelpFormatter):
+    def __init__(self, prog):
+        super().__init__(prog, max_help_position = 28)
 
 @contextlib.contextmanager
-def open_file_or_stdout(filename: str, mode: str = 'w') -> TextIO:
-    is_stdout = not filename or filename == '-'
+def open_file_or_stdout(filename: str | None, mode: str = 'w') -> TextIO:
+    is_stdout = not filename
     fh = os.fdopen(sys.stdout.fileno(), mode) if is_stdout else open(filename, mode)
     try:
         yield fh
     finally:
         if not is_stdout:
             fh.close()
+
+@contextlib.contextmanager
+def open_file_or_dont(filename: str | None, mode: str = 'w') -> TextIO | None:
+    dont_open = not filename
+    fh = None if dont_open else open(filename, mode)
+    try:
+        yield fh
+    finally:
+        if not dont_open:
+            fh.close()
+
+def file_or_stream(filename: str | None) -> str | None:
+    if not filename or filename == '-':
+        return None
+    else:
+        return filename
 
 def read_fasta(file: TextIO) -> tuple[str, str, str]:
     seq = name = header = ''
@@ -38,20 +58,9 @@ def read_ffindex(file: TextIO) -> Iterator[tuple[str, str, int, int]]:
         name, start, length = line.split('\t')
         yield index, name, int(start), int(length)
 
-def apply_to_record(command: list[str], name: str, start: int, length: int, ffdata_in: str) -> tuple[str, str, str, int]:
-    """
-    Run a command on a single record
-    """
-    with open(ffdata_in, 'rb') as ffdata:
-        ffdata.seek(start)
-        record = ffdata.read(length - 1)
-        process = subprocess.Popen(command, stdout = subprocess.PIPE, stdin = subprocess.PIPE, stderr = subprocess.PIPE)
-        stdout, stderr = process.communicate(input = record)
-        return name, stdout, stderr, process.returncode
-
 def run_get() -> None:
     description = "ffindex_get re-implementation in python"
-    parser = argparse.ArgumentParser(description = f"{description}\n{visit}", add_help = False)
+    parser = argparse.ArgumentParser(description = f"{description}\n{visit}", add_help = False, formatter_class = CustomHelpFormatter)
 
     arg_group = parser.add_argument_group()
 
@@ -71,12 +80,13 @@ def run_get() -> None:
     use_index = args.n
     ffdata_in = args.data_filename
     ffindex_in = args.index_filename
-
-    ffdata_out = args.d
+    ffdata_out = file_or_stream(args.d)
     ffindex_out = args.i
 
-    assert ffdata_out and ffindex_out or not ffdata_out and not ffindex_out, "Either specify both -d and -i or none to output to stdout"
-    assert args.entries_file or args.entries and not (args.entries_file and args.entries), "Either specify in-line entries or a file with entries"
+    if ffdata_out and not ffindex_out or ffindex_out and not ffdata_out:
+        raise ValueError("Either specify both -d and -i or none to output to stdout")
+    if args.entries_file and args.entries or not args.entries_file and not args.entries:
+        raise ValueError("Either specify in-line entries or a file with entries")
 
     entries = []
     if args.entries_file:
@@ -84,7 +94,8 @@ def run_get() -> None:
             entries = [ line.rstrip() for line in file ]
     else:
         entries = args.entries
-    assert len(entries) == len(set(entries)), "The list of the entries has duplicates"
+    if len(entries) != len(set(entries)):
+        raise ValueError("The list of the entries has duplicates")
 
     if use_index:
         for i, entry in enumerate(entries):
@@ -107,14 +118,13 @@ def run_get() -> None:
                 data_out.write(record)
                 found[i] = name, offset, length
                 offset += length
+    for i, (name, offset, length) in enumerate(found):
+        if name is None:
+            raise ValueError(f"Requested entry '{entries[i]}' not found in the index")
     if ffindex_out:
         with open(ffindex_out, 'w') as index_out:
-            for i, (name, offset, length) in enumerate(found):
-                assert name is not None, f"Requested entry '{entries[i]}' not found in the index"
+            for name, offset, length in found:
                 index_out.write(f"{name}\t{offset}\t{length}\n")
-    else:
-        for i, (name, offset, length) in enumerate(found):
-            assert name is not None, f"Requested entry '{entries[i]}' not found in the index"
 
 def read_header_line(file: TextIO) -> str:
     header = ''
@@ -129,7 +139,7 @@ def read_header_line(file: TextIO) -> str:
 
 def run_rename() -> None:
     description = "rename ffindex records based on first line of data"
-    parser = argparse.ArgumentParser(description = f"{description}\n{visit}", add_help = False)
+    parser = argparse.ArgumentParser(description = f"{description}\n{visit}", add_help = False, formatter_class = CustomHelpFormatter)
 
     arg_group = parser.add_argument_group()
 
@@ -156,14 +166,20 @@ def run_rename() -> None:
             names[new_name] = True
             index_out.write(f'{new_name}\t{start}\t{length}\n')
 
+def apply_to_record(command: list[str], name: str, start: int, length: int, ffdata_in: str, on_error_original: bool) -> tuple[str, bytes, bytes, int]:
+    """Run a command on a single record
+    """
+    with open(ffdata_in, 'rb') as ffdata:
+        ffdata.seek(start)
+        record = ffdata.read(length - 1)
+        process = subprocess.Popen(command, stdout = subprocess.PIPE, stdin = subprocess.PIPE, stderr = subprocess.PIPE)
+        data_out, data_err = process.communicate(input = record)
+        if process.returncode > 0:
+            data_out = record if on_error_original else b''
+        return name, data_out, data_err, process.returncode
+
 def run_apply() -> None:
-
-    class CustomHelpFormatter(argparse.HelpFormatter):
-        def __init__(self, prog):
-            super().__init__(prog, max_help_position = 50)
-
     description = "ffindex_apply re-implementation in python"
-    description += "\nNote that the ffindex records are sorted by default (as in ffindex_apply_mpi).\nTo keep the input order (as in ffindex_apply) use --keep-order"
     parser = argparse.ArgumentParser(description = f"{description}\n{visit}", add_help = False, formatter_class = CustomHelpFormatter)
 
     arg_group = parser.add_argument_group()
@@ -173,30 +189,48 @@ def run_apply() -> None:
     arg_group.add_argument('-j', metavar = "JOBS", type = int, default = 1, help = 'Number of parallel jobs.')
     arg_group.add_argument('-q', action = 'store_true', help = 'Silence the logging of every processed entry.')
     arg_group.add_argument('-k', action = 'store_true', help = 'Keep unmerged ffindex splits (not implemented).')
-    arg_group.add_argument('--keep-order', action = 'store_true', help = 'Keep ffindex record order (important: this argument is absent in ffindex_apply and ffindex_apply_mpi).')
-    arg_group.add_argument('-d', metavar = 'DATA_FILENAME_OUT', required = True, type = str, help = 'FFindex data file where the results will be saved to.')
-    arg_group.add_argument('-i', metavar = 'INDEX_FILENAME_OUT', required = True, type = str, help = 'FFindex index file where the results will be saved to.')
+    arg_group.add_argument('-d', metavar = 'DATA_FILENAME_OUT', type = str, help = 'FFindex data file where the results will be saved to.')
+    arg_group.add_argument('-i', metavar = 'INDEX_FILENAME_OUT', type = str, help = 'FFindex index file where the results will be saved to.')
+
+    arg_group.add_argument('--index-order', type = str, choices = [ 'keep', 'sort', 'data' ], default = 'keep', help = 'How to order ffindex records [keep] (ffindex_apply keeps, ffindex_apply_mpi sorts).')
+    arg_group.add_argument('--on-error', type = str, choices = [ 'ignore', 'exit', 'blank', 'original' ], default = 'ignore', help = 'Action on exit code >0 [ignore] (ffindex_apply ignores).')
 
     arg_group.add_argument('data_filename', metavar = 'DATA_FILENAME', type = str, help = 'Input ffindex data file.')
     arg_group.add_argument('index_filename', metavar = 'INDEX_FILENAME', type = str, help = 'Input ffindex index file.')
-    arg_group.add_argument('command', metavar = 'PROGRAM [PROGRAM_ARGS]*', type = str, nargs = '+', help = 'Program to be executed for every ffindex entry.')
+    command_meta_var = 'PROGRAM [PROGRAM_ARGS]*'
+    arg_group.add_argument('command', metavar = command_meta_var, type = str, nargs = '+', help = 'Program to be executed for every ffindex entry.')
 
     usage_str = parser.format_usage() # get the generated usage string
-  
+
     # make changes to the usage_str as desired
-    usage_str = usage_str.replace("usage: ", "")
-    usage_str = usage_str.replace("...", "-- PROGRAM [PROGRAM_ARGS]*")
+    # usage_str = usage_str.replace("usage: ", "")
+    usage_str = usage_str.replace(f"{command_meta_var} [{command_meta_var} ...]", f"-- {command_meta_var}")
     parser.usage = usage_str
 
     args = parser.parse_args()
 
-    ffdata_in,  ffindex_in  = args.data_filename, args.index_filename
-    ffdata_out, ffindex_out = args.d, args.i
+    ffdata_in, ffindex_in = args.data_filename, args.index_filename
+    ffdata_out = file_or_stream(args.d)
+    ffindex_out = args.i
+
+    if ffdata_out and not ffindex_out or ffindex_out and not ffdata_out:
+        raise ValueError("Either specify both -d and -i or none to output to stdout")
+
     cmd = args.command
     jobs = args.j
     verbose = not args.q
-    sort_order = not args.keep_order
+    index_order_sort = args.index_order == 'sort'
+    index_order_keep = args.index_order == 'keep'
+    index_order_not_data = args.index_order != 'data'
+    on_error_ignore = args.on_error == 'ignore'
+    on_error_blank = args.on_error == 'blank'
+    on_error_original = args.on_error == 'original'
+    on_error_exit = args.on_error == 'exit'
 
+    if index_order_keep and on_error_ignore:
+        raise ValueError("--index-order keep is incompatible with --on-error ignore")
+
+    is_stdout = not ffdata_out
     # parallel execution with ThreadPoolExecutor
     with concurrent.futures.ThreadPoolExecutor(max_workers = jobs) as executor:
         futures = []
@@ -206,40 +240,47 @@ def run_apply() -> None:
             for index, name, start, length in read_ffindex(f):
                 ffindex[name] = start, length
                 names.append(name)
-        if sort_order:
+        if index_order_sort:
             names.sort()
         for name in names:
             start, length = ffindex[name]
-            futures.append(executor.submit(apply_to_record, cmd, name, start, length, ffdata_in))
+            futures.append(executor.submit(apply_to_record, cmd, name, start, length, ffdata_in, on_error_original))
 
         # Write the output
-        with open(ffdata_out, 'wb') as outdata, open(ffindex_out, 'w') as outindex:
+        with open_file_or_stdout(ffdata_out, 'wb') as outdata, open_file_or_dont(ffindex_out, 'w') as outindex:
             offset = 0
             index_buf = {}
             for future in concurrent.futures.as_completed(futures):
-                try:
-                    name, stdout, stderr, returncode = future.result()
-                    if returncode > 0:
-                        message = stderr.decode("utf-8")
-                        raise Exception(f"Got exit code {returncode} with stderr content: {message}")
-                except Exception as e:
-                    print(f'Record {name} generated an exception: {e}')
+                name, data_out, data_err, returncode = future.result()
+                if returncode > 0:
+                    msg = f'Got exit code {returncode} for record {name} with stderr content: {data_err.decode("utf-8")}'
+                    if on_error_exit:
+                        raise ValueError(msg)
+                    else:
+                        print(msg, file = sys.stderr)
+                    if on_error_ignore:
+                        continue
+                if verbose:
+                    print(name)
+                if is_stdout:
+                    outdata.write(data_out)
                 else:
-                    if verbose:
-                        print(name)
-                    outdata.write(stdout + b'\0')
-                    length = len(stdout) + 1
-                    index_buf[name] = offset, length
+                    outdata.write(data_out + b'\0')
+                    length = len(data_out) + 1
+                    if index_order_not_data:
+                        index_buf[name] = offset, length
+                        while names and names[0] in index_buf:
+                            name0 = names.pop(0)
+                            offset0, length0 = index_buf.pop(name0)
+                            outindex.write(f"{name0}\t{offset0}\t{length0}\n")
+                    else:
+                        outindex.write(f"{name}\t{offset}\t{length}\n")
                     offset += length
-                    # to guarantee the order of ffindex
-                    while names and names[0] in index_buf:
-                        name0 = names.pop(0)
-                        offset0, length0 = index_buf.pop(name0)
-                        outindex.write(f"{name0}\t{offset0}\t{length0}\n")
+            assert not index_buf, "index_buf is not empty, output index is corrupt"
 
 def run_reindex() -> None:
     description = "Re-index an existing .ffdata file"
-    parser = argparse.ArgumentParser(description = f"{description}\n{visit}", add_help = False)
+    parser = argparse.ArgumentParser(description = f"{description}\n{visit}", add_help = False, formatter_class = CustomHelpFormatter)
 
     arg_group = parser.add_argument_group()
 
@@ -298,7 +339,7 @@ def run_reindex() -> None:
 
 def run_from_fasta() -> None:
     description = "Create a ffindex database from a fasta file"
-    parser = argparse.ArgumentParser(description = f"{description}\n{visit}", add_help = False)
+    parser = argparse.ArgumentParser(description = f"{description}\n{visit}", add_help = False, formatter_class = CustomHelpFormatter)
 
     arg_group = parser.add_argument_group()
 
