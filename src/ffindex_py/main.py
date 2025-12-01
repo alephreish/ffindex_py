@@ -313,20 +313,17 @@ def run_merge() -> None:
     arg_group.add_argument('input_files1', metavar = 'DATA_FILENAME', type = str, nargs = '+', help = 'Paths to the ffdata files')
     arg_group.add_argument('input_files2', metavar = 'INDEX_FILENAME', type = str, nargs = '+', help = 'Paths to the ffindex files')
 
-    usage_str = parser.format_usage()
-    usage_str = usage_str.replace("DATA_FILENAME [DATA_FILENAME ...] INDEX_FILENAME [INDEX_FILENAME ...]", "DATA_FILENAME INDEX_FILENAME [DATA_FILENAME INDEX_FILENAME ...]")
-    parser.usage = usage_str
-
     args = parser.parse_args()
 
     input_files = args.input_files1 + args.input_files2
-    if len(input_files) % 2 != 0:
+    num_files = len(input_files)
+    if num_files % 2 != 0:
         raise ValueError("Different number of input ffdata and ffindex files")
 
     ffdata_out = args.d
     ffindex_out = args.i
-    ffdata_files = input_files[0::2]
-    ffindex_files = input_files[1::2]
+    ffdata_files = input_files[:num_files//2]
+    ffindex_files = input_files[num_files//2:]
     keep_existing = bool(args.k)
     rename_duplicates = args.r
     max_width = args.max_width

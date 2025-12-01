@@ -10,3 +10,4 @@ Currently implemented are:
 * `ffindex_get_py` -- get entries from an ffindex database
 * `ffindex_reindex_py` -- re-index an existing `.ffdata` file
 * `ffindex_rename_py` -- rename entries `.ffindex` from first word of the record in `.ffdata`
+* `ffindex_merge_py` -- merge multiple ffindex databases
