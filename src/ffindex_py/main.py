@@ -295,6 +295,69 @@ def run_apply() -> None:
                     offset += length
             assert not index_buf, "index_buf is not empty, output index is corrupt"
 
+def run_merge() -> None:
+    description = "Merge several .ffindex databases"
+    parser = argparse.ArgumentParser(description = f"{description}\n{visit}", add_help = False, formatter_class = CustomHelpFormatter)
+
+    arg_group = parser.add_argument_group()
+
+    arg_group.add_argument('-h', '--help', action = 'help', default=argparse.SUPPRESS, help = "Show this help message and exit.")
+    arg_group.add_argument('-v', '--version', action = 'version', version = "%(prog)s v{version}", help = "Show program's version number and exit.")
+    arg_group.add_argument('-d', metavar = 'DATA_FILENAME_OUT', type = str, required = True, help = 'FFindex data file where the results will be saved to.')
+    arg_group.add_argument('-i', metavar = 'INDEX_FILENAME_OUT', type = str, required = True, help = 'FFindex index file where the results will be saved to.')
+    arg_group.add_argument('-k', action = 'store_true', help = 'Keep existing names.')
+    arg_group.add_argument('-r', action = 'store_true', help = 'Rename duplicate names (otherwise raise exception on duplicate).')
+    arg_group.add_argument('--max-width', metavar = 'MAX_WIDTH', type = int, default = 0, help = 'Maximum name width (zero for no restriction).')
+    arg_group.add_argument('--pad-width', metavar = 'PAD_WIDTH', type = int, default = 10, help = 'Pad indexes with zeros to this width.')
+
+    arg_group.add_argument('input_files1', metavar = 'DATA_FILENAME', type = str, nargs = '+', help = 'Paths to the ffdata files')
+    arg_group.add_argument('input_files2', metavar = 'INDEX_FILENAME', type = str, nargs = '+', help = 'Paths to the ffindex files')
+
+    usage_str = parser.format_usage()
+    usage_str = usage_str.replace("DATA_FILENAME [DATA_FILENAME ...] INDEX_FILENAME [INDEX_FILENAME ...]", "DATA_FILENAME INDEX_FILENAME [DATA_FILENAME INDEX_FILENAME ...]")
+    parser.usage = usage_str
+
+    args = parser.parse_args()
+
+    input_files = args.input_files1 + args.input_files2
+    if len(input_files) % 2 != 0:
+        raise ValueError("Different number of input ffdata and ffindex files")
+
+    ffdata_out = args.d
+    ffindex_out = args.i
+    ffdata_files = input_files[0::2]
+    ffindex_files = input_files[1::2]
+    keep_existing = bool(args.k)
+    rename_duplicates = args.r
+    max_width = args.max_width
+    pad_width = args.pad_width
+
+    offset = 0
+    global_index = 0
+    names = set()
+    with open(ffdata_out, 'wb') as data_out, open(ffindex_out, 'w') as index_out:
+        for ffdata_in, ffindex_in in zip(ffdata_files, ffindex_files):
+            with open(ffdata_in, 'rb', buffering = 0) as data_in, open(ffindex_in, 'r') as index_in:
+                for index, name, start, length in read_ffindex(index_in):
+                    if keep_existing:
+                        while name in names:
+                            if not rename_duplicates:
+                                raise ValueError(f"Duplicate name: {name}")
+                            name += "^"
+                        if max_width and len(name) >= max_width:
+                            raise ValueError(f"'{name}' is wider than --max-width")
+                        names.add(name)
+                    else:
+                        name = f"{global_index:0{pad_width}}"
+                        if len(name) > pad_width:
+                            raise ValueError(f"'{name}' is wider than --pad-width")
+                    data_in.seek(start)
+                    record = data_in.read(length)
+                    data_out.write(record)
+                    index_out.write(f"{name}\t{offset}\t{length}\n")
+                    offset += length
+                    global_index += 1
+
 def run_reindex() -> None:
     description = "Re-index an existing .ffdata file"
     parser = argparse.ArgumentParser(description = f"{description}\n{visit}", add_help = False, formatter_class = CustomHelpFormatter)
@@ -305,7 +368,7 @@ def run_reindex() -> None:
     arg_group.add_argument('-v', '--version', action = 'version', version = "%(prog)s v{version}", help = "Show program's version number and exit.")
     arg_group.add_argument('-p', action = 'store_true', help = 'Parse names from the first line in each record.')
     arg_group.add_argument('-r', action = 'store_true', help = 'Rename duplicate names (otherwise raise exception on duplicate).')
-    arg_group.add_argument('--max-width', metavar = 'MAX_WIDTH', type = int, default = 63, help = 'Maximum name width.')
+    arg_group.add_argument('--max-width', metavar = 'MAX_WIDTH', type = int, default = 0, help = 'Maximum name width (0 for no restriction).')
     arg_group.add_argument('--pad-width', metavar = 'PAD_WIDTH', type = int, default = 10, help = 'Pad indexes with zeros to this width.')
 
     arg_group.add_argument('ffdata', metavar = 'DATA_FILENAME_IN', type = str, help = 'Path to the ffdata file to be reindexed')
@@ -316,14 +379,16 @@ def run_reindex() -> None:
     ffdata_file = args.ffdata
     ffindex_file = args.ffindex
     parse_names = args.p
-    allow_duplicates = args.r
+    ckeck_duplicates = not args.r
+    max_width = args.max_width
+    pad_width = args.pad_width
 
     with open(ffdata_file, 'rb') as ffdata_file, open(ffindex_file, 'w') as ffindex_file:
         chunk_size = 1024*1024  # chunk size of 1MB
         offset = 0
         record_length = 1
         index = 0
-        headers = {}
+        names = set()
         in_header = True
         header = ''
         while True:
@@ -332,18 +397,18 @@ def run_reindex() -> None:
                 for byte in chunk:
                     if byte == 0: # if null character is found
                         if parse_names:
-                            header= header.lstrip('#>')
-                            assert header, f"Empty name at index {index}"
-                            while header in headers:
-                                if not allow_duplicates:
-                                    raise ValueError(f"Duplicate name '{header}'")
+                            name = header.lstrip('#>')
+                            name = name.split(maxsplit = 1)
+                            assert name, f"Empty name at index {index}"
+                            while name in names:
+                                if check_duplicates:
+                                    raise ValueError(f"Duplicate name '{name}'")
                                 header += '^'
-                            headers[header] = True
-                            name = header
-                            if len(name) > args.max_width:
+                            names.add(name)
+                            if max_width and len(name) > max_width:
                                 raise ValueError(f"'{name}' is wider than --max-width")
                         else:
-                            name = f"{index:0{args.pad_width}}"
+                            name = f"{index:0{pad_width}}"
                             if len(name) > args.pad_width:
                                 raise ValueError(f"'{name}' is wider than --pad-width")
                         ffindex_file.write(f'{name}\t{offset}\t{record_length}\n')
