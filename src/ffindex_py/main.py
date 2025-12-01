@@ -67,6 +67,7 @@ def run_get() -> None:
     arg_group.add_argument('-h', '--help', action = 'help', default = argparse.SUPPRESS, help = "Show this help message and exit.")
     arg_group.add_argument('-v', '--version', action = 'version', version = "%(prog)s v{version}", help = "Show program's version number and exit.")
     arg_group.add_argument('-n', action = 'store_true', help = 'Use index of entry instead of entry name.')
+    arg_group.add_argument('--ignore-missing', action = 'store_true', help = 'Ignore missing entries (or indices).')
     arg_group.add_argument('--entries-file', metavar = 'FILE_WITH_ENTRIES', type = str, help = 'Text file with entries (or indices).')
 
     arg_group.add_argument('-d', metavar = 'DATA_FILENAME_OUT', type = str, help = 'FFindex data file where the results will be saved to.')
@@ -118,9 +119,10 @@ def run_get() -> None:
                 data_out.write(record)
                 found[i] = name, offset, length
                 offset += length
-    for i, (name, offset, length) in enumerate(found):
-        if name is None:
-            raise ValueError(f"Requested entry '{entries[i]}' not found in the index")
+    if not args.ignore_missing:
+        for i, (name, offset, length) in enumerate(found):
+            if name is None:
+                raise ValueError(f"Requested entry '{entries[i]}' not found in the index")
     if ffindex_out:
         with open(ffindex_out, 'w') as index_out:
             for name, offset, length in found:
