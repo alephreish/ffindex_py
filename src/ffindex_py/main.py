@@ -86,15 +86,20 @@ def run_get() -> None:
 
     if ffdata_out and not ffindex_out or ffindex_out and not ffdata_out:
         raise ValueError("Either specify both -d and -i or none to output to stdout")
-    if args.entries_file and args.entries or not args.entries_file and not args.entries:
-        raise ValueError("Either specify in-line entries or a file with entries")
+    if args.entries_file and args.entries:
+        raise ValueError("Either specify in-line entries or a file with entries (or neither to fetch all entries)")
+    if use_index and not args.entries_file and not args.entries:
+        raise ValueError("For --use-index you need to provide in-line indexes or a file with entries (indexes)")
 
     entries = []
     if args.entries_file:
         with open(args.entries_file) as file:
             entries = [ line.rstrip() for line in file ]
-    else:
+        if not entries:
+            raise ValueError("The provided entries file is empty")
+    elif args.entries:
         entries = args.entries
+
     if len(entries) != len(set(entries)):
         raise ValueError("The list of the entries has duplicates")
 
@@ -107,18 +112,23 @@ def run_get() -> None:
 
     found = [ (None, None, None) ] * len(entries)
 
+    has_entries = bool(entries)
     len_subtract = -1 if not ffdata_out else 0 # remove zero byte if output to stdout
     with open(ffindex_in, 'r') as index_in, open(ffdata_in, 'rb', buffering = 0) as data_in, open_file_or_stdout(ffdata_out, 'wb') as data_out:
         offset = 0
         for index, name, start, length in read_ffindex(index_in):
-            needle = index if use_index else name
-            if needle in entries:
+            if has_entries:
+                needle = index if use_index else name
+                if needle not in entries:
+                    continue
                 i = entries.index(needle)
-                data_in.seek(start)
-                record = data_in.read(length + len_subtract)
-                data_out.write(record)
                 found[i] = name, offset, length
-                offset += length
+            else:
+                found.append((name, offset, length))
+            data_in.seek(start)
+            record = data_in.read(length + len_subtract)
+            data_out.write(record)
+            offset += length
     if not args.ignore_missing:
         for i, (name, offset, length) in enumerate(found):
             if name is None:
