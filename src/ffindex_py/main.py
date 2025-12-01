@@ -68,6 +68,8 @@ def run_get() -> None:
     arg_group.add_argument('-v', '--version', action = 'version', version = "%(prog)s v{version}", help = "Show program's version number and exit.")
     arg_group.add_argument('-n', action = 'store_true', help = 'Use index of entry instead of entry name.')
     arg_group.add_argument('--ignore-missing', action = 'store_true', help = 'Ignore missing entries (or indices).')
+    arg_group.add_argument('--ignore-empty', action = 'store_true', help = 'Quietly output nothing if no entries requested.')
+    arg_group.add_argument('--all', action = 'store_true', help = 'Get all entries in ffindex.')
     arg_group.add_argument('--entries-file', metavar = 'FILE_WITH_ENTRIES', type = str, help = 'Text file with entries (or indices).')
 
     arg_group.add_argument('-d', metavar = 'DATA_FILENAME_OUT', type = str, help = 'FFindex data file where the results will be saved to.')
@@ -86,8 +88,8 @@ def run_get() -> None:
 
     if ffdata_out and not ffindex_out or ffindex_out and not ffdata_out:
         raise ValueError("Either specify both -d and -i or none to output to stdout")
-    if args.entries_file and args.entries:
-        raise ValueError("Either specify in-line entries or a file with entries (or neither to fetch all entries)")
+    if bool(args.entries_file) + bool(args.entries) + bool(args.all) > 1:
+        raise ValueError("Either specify in-line entries, --entries-file or --all")
     if use_index and not args.entries_file and not args.entries:
         raise ValueError("For --use-index you need to provide in-line indexes or a file with entries (indexes)")
 
@@ -95,10 +97,12 @@ def run_get() -> None:
     if args.entries_file:
         with open(args.entries_file) as file:
             entries = [ line.rstrip() for line in file ]
-        if not entries:
+        if not args.ignore_empty and not entries:
             raise ValueError("The provided entries file is empty")
-    elif args.entries:
+    elif not args.all:
         entries = args.entries
+        if not args.ignore_empty and not entries:
+            raise ValueError("No entries provided")
 
     if len(entries) != len(set(entries)):
         raise ValueError("The list of the entries has duplicates")
@@ -112,19 +116,18 @@ def run_get() -> None:
 
     found = [ (None, None, None) ] * len(entries)
 
-    has_entries = bool(entries)
     len_subtract = -1 if not ffdata_out else 0 # remove zero byte if output to stdout
     with open(ffindex_in, 'r') as index_in, open(ffdata_in, 'rb', buffering = 0) as data_in, open_file_or_stdout(ffdata_out, 'wb') as data_out:
         offset = 0
         for index, name, start, length in read_ffindex(index_in):
-            if has_entries:
+            if args.all:
+                found.append((name, offset, length))
+            else:
                 needle = index if use_index else name
                 if needle not in entries:
                     continue
                 i = entries.index(needle)
                 found[i] = name, offset, length
-            else:
-                found.append((name, offset, length))
             data_in.seek(start)
             record = data_in.read(length + len_subtract)
             data_out.write(record)
@@ -302,6 +305,8 @@ def run_reindex() -> None:
     arg_group.add_argument('-v', '--version', action = 'version', version = "%(prog)s v{version}", help = "Show program's version number and exit.")
     arg_group.add_argument('-p', action = 'store_true', help = 'Parse names from the first line in each record.')
     arg_group.add_argument('-r', action = 'store_true', help = 'Rename duplicate names (otherwise raise exception on duplicate).')
+    arg_group.add_argument('--max-width', metavar = 'MAX_WIDTH', type = int, default = 63, help = 'Maximum name width.')
+    arg_group.add_argument('--pad-width', metavar = 'PAD_WIDTH', type = int, default = 10, help = 'Pad indexes with zeros to this width.')
 
     arg_group.add_argument('ffdata', metavar = 'DATA_FILENAME_IN', type = str, help = 'Path to the ffdata file to be reindexed')
     arg_group.add_argument('ffindex', metavar = 'INDEX_FILENAME_OUT', type = str, help = 'Path to the output ffindex file')
@@ -330,12 +335,17 @@ def run_reindex() -> None:
                             header= header.lstrip('#>')
                             assert header, f"Empty name at index {index}"
                             while header in headers:
-                                assert allow_duplicates, f"Duplicate name '{header}'"
+                                if not allow_duplicates:
+                                    raise ValueError(f"Duplicate name '{header}'")
                                 header += '^'
                             headers[header] = True
                             name = header
+                            if len(name) > args.max_width:
+                                raise ValueError(f"'{name}' is wider than --max-width")
                         else:
-                            name = index
+                            name = f"{index:0{args.pad_width}}"
+                            if len(name) > args.pad_width:
+                                raise ValueError(f"'{name}' is wider than --pad-width")
                         ffindex_file.write(f'{name}\t{offset}\t{record_length}\n')
                         offset += record_length
                         record_length = 1
