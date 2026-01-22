@@ -16,7 +16,7 @@ class CustomHelpFormatter(argparse.HelpFormatter):
 @contextlib.contextmanager
 def open_file_or_stdout(filename: str | None, mode: str = 'w') -> TextIO:
     is_stdout = not filename
-    fh = os.fdopen(sys.stdout.fileno(), mode) if is_stdout else open(filename, mode)
+    fh = os.fdopen(sys.stdout.fileno(), mode, closefd = False) if is_stdout else open(filename, mode)
     try:
         yield fh
     finally:
@@ -65,7 +65,7 @@ def run_get() -> None:
     arg_group = parser.add_argument_group()
 
     arg_group.add_argument('-h', '--help', action = 'help', default = argparse.SUPPRESS, help = "Show this help message and exit.")
-    arg_group.add_argument('-v', '--version', action = 'version', version = "%(prog)s v{version}", help = "Show program's version number and exit.")
+    arg_group.add_argument('-v', '--version', action = 'version', version = f"%(prog)s v{version}", help = "Show program's version number and exit.")
     arg_group.add_argument('-n', action = 'store_true', help = 'Use index of entry instead of entry name.')
     arg_group.add_argument('--ignore-missing', action = 'store_true', help = 'Ignore missing entries (or indices).')
     arg_group.add_argument('--ignore-empty', action = 'store_true', help = 'Quietly output nothing if no entries requested.')
@@ -159,7 +159,7 @@ def run_rename() -> None:
     arg_group = parser.add_argument_group()
 
     arg_group.add_argument('-h', '--help', action = 'help', default = argparse.SUPPRESS, help = "Show this help message and exit.")
-    arg_group.add_argument('-v', '--version', action = 'version', version = "%(prog)s v{version}", help = "Show program's version number and exit.")
+    arg_group.add_argument('-v', '--version', action = 'version', version = f"%(prog)s v{version}", help = "Show program's version number and exit.")
     arg_group.add_argument('-i', metavar = 'INDEX_FILENAME_OUT', type = str, help = 'FFindex index file where the results will be saved to.')
 
     arg_group.add_argument('data_filename', metavar = 'DATA_FILENAME', type = str, help = 'Input ffindex data file.')
@@ -200,7 +200,7 @@ def run_apply() -> None:
     arg_group = parser.add_argument_group()
 
     arg_group.add_argument('-h', '--help', action = 'help', default = argparse.SUPPRESS, help = "Show this help message and exit.")
-    arg_group.add_argument('-v', '--version', action = 'version', version = "%(prog)s v{version}", help = "Show program's version number and exit.")
+    arg_group.add_argument('-v', '--version', action = 'version', version = f"%(prog)s v{version}", help = "Show program's version number and exit.")
     arg_group.add_argument('-j', metavar = "JOBS", type = int, default = 1, help = 'Number of parallel jobs.')
     arg_group.add_argument('-q', action = 'store_true', help = 'Silence the logging of every processed entry.')
     arg_group.add_argument('-k', action = 'store_true', help = 'Keep unmerged ffindex splits (not implemented).')
@@ -219,8 +219,6 @@ def run_apply() -> None:
 
     usage_str = parser.format_usage() # get the generated usage string
 
-    # make changes to the usage_str as desired
-    # usage_str = usage_str.replace("usage: ", "")
     usage_str = usage_str.replace(f"{command_meta_var} [{command_meta_var} ...]", f"-- {command_meta_var}")
     parser.usage = usage_str
 
@@ -230,6 +228,7 @@ def run_apply() -> None:
     ffdata_out = file_or_stream(args.d)
     ffindex_out = args.i
 
+    print(ffdata_out, ffindex_out)
     if ffdata_out and not ffindex_out or ffindex_out and not ffdata_out:
         raise ValueError("Either specify both -d and -i or none to output to stdout")
 
@@ -302,7 +301,7 @@ def run_merge() -> None:
     arg_group = parser.add_argument_group()
 
     arg_group.add_argument('-h', '--help', action = 'help', default=argparse.SUPPRESS, help = "Show this help message and exit.")
-    arg_group.add_argument('-v', '--version', action = 'version', version = "%(prog)s v{version}", help = "Show program's version number and exit.")
+    arg_group.add_argument('-v', '--version', action = 'version', version = f"%(prog)s v{version}", help = "Show program's version number and exit.")
     arg_group.add_argument('-d', metavar = 'DATA_FILENAME_OUT', type = str, required = True, help = 'FFindex data file where the results will be saved to.')
     arg_group.add_argument('-i', metavar = 'INDEX_FILENAME_OUT', type = str, required = True, help = 'FFindex index file where the results will be saved to.')
     arg_group.add_argument('-k', action = 'store_true', help = 'Keep existing names.')
@@ -362,7 +361,7 @@ def run_reindex() -> None:
     arg_group = parser.add_argument_group()
 
     arg_group.add_argument('-h', '--help', action = 'help', default=argparse.SUPPRESS, help = "Show this help message and exit.")
-    arg_group.add_argument('-v', '--version', action = 'version', version = "%(prog)s v{version}", help = "Show program's version number and exit.")
+    arg_group.add_argument('-v', '--version', action = 'version', version = f"%(prog)s v{version}", help = "Show program's version number and exit.")
     arg_group.add_argument('-p', action = 'store_true', help = 'Parse names from the first line in each record.')
     arg_group.add_argument('-r', action = 'store_true', help = 'Rename duplicate names (otherwise raise exception on duplicate).')
     arg_group.add_argument('--max-width', metavar = 'MAX_WIDTH', type = int, default = 0, help = 'Maximum name width (0 for no restriction).')
@@ -430,7 +429,7 @@ def run_from_fasta() -> None:
     arg_group = parser.add_argument_group()
 
     arg_group.add_argument('-h', '--help', action = 'help', default=argparse.SUPPRESS, help = "Show this help message and exit.")
-    arg_group.add_argument('-v', '--version', action = 'version', version = "%(prog)s v{version}", help = "Show program's version number and exit.")
+    arg_group.add_argument('-v', '--version', action = 'version', version = f"%(prog)s v{version}", help = "Show program's version number and exit.")
     arg_group.add_argument('ffdata', metavar = 'DATA_FILENAME_OUT', type = str, help = 'Path to output ffdata file.')
     arg_group.add_argument('ffindex', metavar = 'INDEX_FILENAME_OUT', type = str, help = 'Path to output ffindex file.')
     arg_group.add_argument('fasta', metavar = 'FASTA', type = str, help = 'Path to input fasta file.')
