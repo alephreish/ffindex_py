@@ -228,7 +228,6 @@ def run_apply() -> None:
     ffdata_out = file_or_stream(args.d)
     ffindex_out = args.i
 
-    print(ffdata_out, ffindex_out)
     if ffdata_out and not ffindex_out or ffindex_out and not ffdata_out:
         raise ValueError("Either specify both -d and -i or none to output to stdout")
 
